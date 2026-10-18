@@ -1,0 +1,450 @@
+---
+title: "Final_Project"
+output: pdf_document
+date: "2026-10-01"
+---
+
+```{r setup, include=FALSE}
+# Loading required packages
+library(tidyverse)
+library(gridExtra)
+library(readr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data preparation
+
+```{r import}
+# Downloading the sample count matrix and metadata
+counts <- read.csv("~/Documents/Final Project-1/counts.csv", 
+                   row.names = 1, 
+                   check.names = FALSE)
+meta   <- read.csv("~/Documents/Final Project-1/meta_data.csv")
+
+
+```
+
+## Gene selection and Summary statistics
+
+```{r select-gene}
+
+# Creating a function to-
+# validate selected gene and fix ID versions
+fix_ensembl_ids <- function(gene_list, counts) {
+  sapply(gene_list, function(g) {
+    if (g %in% rownames(counts)) {
+      return(g)
+    } else {
+      hits <- grep(g, rownames(counts), value = TRUE)
+      if (length(hits) > 0) {
+        return(hits[1])
+      } else {
+        return(NA)
+      }
+    }
+  })
+}
+
+# Selecting gene "ENSG00000153563"  from the list
+# This is the gene CD8A which is marker for cytotoxic T cells
+gene1 <- "ENSG00000153563"
+
+# Now, validating the selected ensembl ID
+gene1 <- fix_ensembl_ids(gene1, counts)
+gene1
+
+# Extracting counts for this from all samples
+gene1_counts <- as.numeric(counts[gene1, ])
+
+head(gene1_counts)
+length(gene1_counts)
+
+# Generating summary statistics
+
+   # changing row names into columns
+   gene1_long <- counts %>%
+   rownames_to_column("gene") %>%
+   # filtering only for selected gene
+   filter(gene == gene1) %>%
+   # converting wide to long data format
+   pivot_longer(
+    cols = -gene,
+    names_to = "sample",
+    values_to = "count"
+   )
+
+   summary_stats <- gene1_long%>%
+    summarise(
+    mean   = mean(count),
+    median = median(count),
+    sd     = sd(count),
+    min    = min(count),
+    max    = max(count)
+  )
+   
+summary_stats   
+
+# Save as CSV
+write.csv(summary_stats, "summary_statistics_CD8A", row.names = FALSE)  
+
+
+```
+
+## Visualization
+
+```{r histogram}
+
+# Generating histogram using long data format
+ggplot(gene1_long, aes(x = count)) +
+  geom_histogram(
+    bins = 30,
+    color = "black",
+    fill = "steelblue"
+  ) +
+  labs(
+    title = "Distribution of expression values for CD8A",
+    x = "Counts",
+    y = "Number of samples"
+  ) +
+  theme_minimal()
+```
+
+
+```{r scatterplot}
+
+# Generating scatterplot using gene1 and 2nd gene
+
+# Selecting ENSG00000188389 as the 2nd gene
+# This gene(PDCD1) codes PD1
+  gene2 <- "ENSG00000188389"
+
+# Validating the ensembl ID
+gene2 <- fix_ensembl_ids(gene2, counts)
+gene2
+
+# Extracting counts for this from all samples
+  gene2_counts <- as.numeric(counts[gene2, ])
+  head(gene2_counts)
+  length(gene2_counts) 
+  
+# Changing row names into columns
+  gene2_long <- counts %>%
+  rownames_to_column("gene") %>%
+  #filtering only for selected gene
+  filter(gene == gene2) %>%
+  #converting wide to long data format
+   pivot_longer(
+    cols = -gene,
+    names_to = "sample",
+    values_to = "count"
+   )
+ 
+# Adding metadata to both genes
+gene1_meta <- gene1_long %>%
+  left_join(meta, by = c("sample" = "barcode"))
+
+gene2_meta <- gene2_long %>%
+  left_join(meta, by = c("sample" = "barcode"))
+
+    
+# Renaming
+gene1_cln <- gene1_meta %>% rename(gene1_count = count)
+gene2_cln <- gene2_meta %>% rename(gene2_count = count)
+
+# Joining the genes
+scatter_df <- left_join(gene1_cln, gene2_cln, by = c("sample", "paper_BRCA_Subtype_PAM50"))
+
+# Now generating the plot
+ggplot(scatter_df, aes(
+  x = gene1_count, 
+  y = gene2_count,
+  color = paper_BRCA_Subtype_PAM50
+  )) +
+  geom_point(alpha = 0.6, size = 2) +
+  #because the range of the counts is huge,
+  #transforming the axes into log
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(
+    title = "CD8A vs PDCD1 Expression Colored by Molecular Subtype",
+    x = "CD8A Counts",
+    y = "PDCD1 Counts",
+    color = "Subtype"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+```{r violin plot}
+# Generating violin plot
+
+# We already have gene1_long with sample and counts
+# Now, if we want "Molecular subtypes" as covariate,
+# we first join metadata to gene1_long
+ gene1_meta <- gene1_long %>%
+ left_join(meta, by = c("sample" = "barcode"))
+
+# choosing "Molecular subtypes" as the covariate
+ggplot(gene1_meta, aes(x = paper_BRCA_Subtype_PAM50, y = count)) +
+  geom_violin(fill = "forestgreen", alpha = 0.6) +
+  labs(
+    title = "Violin Plot of Gene Expression by Molecular Subtypes",
+    x = "Molecular Subtypes",
+    y = "Counts for CD8 cytotoxic T cells"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+
+```{r heatmap}
+## Generating Heatmaps
+library(circlize)
+library(ComplexHeatmap)
+
+# 1. Selecting 10 genes focussed on tumor microenvironment
+selected_genes <- c(
+  "ENSG00000153563",
+  "ENSG00000172116",
+  "ENSG00000198851",
+  "ENSG00000100453",
+  "ENSG00000180644",
+  "ENSG00000188389",
+  "ENSG00000120217",
+  "ENSG00000163599",
+  "ENSG00000089692",
+  "ENSG00000049768"
+)
+
+# 2. Now, validating the ensemble IDs
+selected_genes <- fix_ensembl_ids(selected_genes, counts)
+selected_genes
+
+# 3. Extracting count for these genes
+heatmap_mat <- counts[selected_genes, ]
+heatmap_mat <- as.matrix(heatmap_mat)
+
+# 4. Generating gene names for the rows
+gene_names <- c("CD8A", "CD8B", "CD3E",
+               "GZMB", "PRF1", "PDCD1",
+               "CD274", "CTLA4", "LAG3", "FOXP3")
+
+# 5. Log transform
+heatmap_mat <- log2(heatmap_mat + 1)
+
+# 6. Applying z score scale
+heatmap_scaled <- t(scale(t(heatmap_mat)))
+
+# 7. Replacing row names with gene names
+rownames(heatmap_scaled) <- gene_names
+
+# 8. Prepare metadata for annotation
+meta2 <- meta %>%
+  select(barcode, paper_BRCA_Subtype_PAM50) %>%
+  filter(barcode %in% colnames(heatmap_scaled)) %>%
+  arrange(match(colnames(heatmap_scaled), barcode))
+
+# 9. Creating the annotation bar
+ha <- HeatmapAnnotation(
+  Subtype = meta2$paper_BRCA_Subtype_PAM50,
+  col = list(Subtype = c(
+    "LumA"   = "#4DBEEE",
+  "LumB"   = "#EDB120",
+  "Her2"   = "#D95319",
+  "Basal"  = "#7E2F8E",
+  "Normal" = "#77AC30",
+  "NA"     = "grey70"
+  )),
+  which = "column",
+  height = unit(0.6, "cm")
+)
+
+# 10. Generating heat map
+Heatmap(
+  heatmap_scaled,
+  name = "Z-score",
+  top_annotation = ha,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  row_names_gp = gpar(fontsize = 12),
+  show_column_names = FALSE,
+  col = colorRamp2(
+         c(-2, 0, 2), 
+         c("#4575b4", "white", "#d73027")),
+  border = TRUE
+)
+
+```
+
+
+Additional Tasks for Final Project Submission
+
+1. Generating summary statistics for 1 more gene. 
+Here, since I have already validated the ensembl ID for gene2, 
+the summary statistics is for the same.
+```{r select-additionalgene}
+# Since we already have gene2 (PDCD1), using the same-
+
+# We already have validated ensembl ID above
+
+# Extracting counts for this from all samples
+gene2_counts <- as.numeric(counts[gene2, ])
+
+head(gene2_counts)
+length(gene2_counts)
+
+# Generating summary statistics
+
+   # Changing row names into columns
+   gene2_long <- counts %>%
+   rownames_to_column("gene") %>%
+   # Filtering only for selected gene
+   filter(gene == gene2) %>%
+   # Converting wide to long data format
+   pivot_longer(
+    cols = -gene,
+    names_to = "Sample",
+    values_to = "Count"
+   )
+
+   summary_stats_gene2 <- gene2_long%>%
+    summarise(
+    mean   = mean(Count),
+    median = median(Count),
+    sd     = sd(Count),
+    min    = min(Count),
+    max    = max(Count)
+  )
+
+summary_stats_gene2  
+
+# Save as CSV
+write.csv(summary_stats_gene2, "summary_statistics_PDCD1", row.names = FALSE)  
+
+
+```
+
+```{r volcano plot}
+
+library(tidyverse)
+library(ggrepel)
+library(org.Hs.eg.db)
+library(dplyr)
+
+# 1. Log-transforming the counts counts
+log_counts <- log2(counts + 1)
+
+# 2. Defining High vs Low groups using CD8A median (already calculated above)
+cd8a_median <- summary_stats$median[1]
+group_labels <- ifelse(gene1_counts > cd8a_median, "High", "Low")
+names(group_labels) <- colnames(counts)
+
+high_samples <- names(group_labels)[group_labels == "High"]
+low_samples  <- names(group_labels)[group_labels == "Low"]
+
+# 3. Computing fold change
+mean_high <- rowMeans(log_counts[, high_samples])
+mean_low  <- rowMeans(log_counts[, low_samples])
+FC <- mean_high - mean_low
+
+# 4. Computing p-values
+pvals <- apply(log_counts, 1, function(x)
+  t.test(x[high_samples], x[low_samples])$p.value
+)
+
+# 5. Building volcano dataframe
+volcano_df <- data.frame(
+  gene = rownames(counts),
+  FC = FC,
+  pval = pvals,
+  neglog10 = -log10(pvals)
+)
+volcano_df <- as.data.frame(volcano_df)
+
+# 6. Cleaning the Ensembl IDs (removing version numbers)
+volcano_df$ensembl_clean <- sub("\\..*", "", volcano_df$gene)
+
+# 7. Mapping Ensembl IDs to Gene Symbol
+volcano_df$symbol <- mapIds(
+  org.Hs.eg.db,
+  keys = volcano_df$ensembl_clean,
+  column = "SYMBOL",
+  keytype = "ENSEMBL",
+  multiVals = "first"
+)
+
+# 8. Adding significance categories
+volcano_df <- volcano_df %>%
+  mutate(
+    sig = case_when(
+      pval < 0.1 & FC > 0.5  ~ "Up in CD8A-High",
+      pval < 0.1 & FC < -0.5 ~ "Down in CD8A-High",
+      TRUE ~ "Not Significant"
+    )
+  )
+
+# 9. Selecting top 5 up and downregulated genes (remove NA symbols first)
+top_up <- volcano_df %>%
+  filter(sig != "Not Significant") %>%
+  filter(!is.na(symbol)) %>%        # <-- prevents ggrepel crash
+  arrange(pval) %>%
+  dplyr::slice(1:5)
+
+top_down <- volcano_df %>%
+  filter(sig == "Down in CD8A-High", !is.na(symbol)) %>%
+  arrange(pval) %>%
+  dplyr::slice(1:5)
+
+top_genes <- bind_rows(top_up, top_down)
+
+# 10. Generating Volcano plot
+ggplot(volcano_df, aes(x = FC, y = neglog10)) +
+  
+  # Base points
+  geom_point(aes(color = sig), alpha = 0.6, size = 1.8) +
+  
+  # Label top genes
+  geom_text_repel(
+    data = top_genes,
+    aes(label = symbol),
+    size = 3.5,
+    max.overlaps = 20
+  ) +
+  
+  # Threshold lines
+  geom_vline(xintercept = c(-0.5, 0.5), linetype = "dashed", color = "grey40") +
+  geom_hline(yintercept = -log10(0.1), linetype = "dashed", color = "grey40") +
+  
+  scale_color_manual(
+    values = c(
+      "Up in CD8A-High" = "red",
+      "Down in CD8A-High" = "forestgreen",
+      "Not Significant" = "grey60"
+    )
+  ) +
+  
+  labs(
+    title = "Volcano Plot: High vs Low CD8A Expression",
+    subtitle = "Top 5 Upregulated and Downregulated Genes",
+    x = "Fold Change (High - Low)",
+    y = "-log10(p-value)",
+    color = "Significance"
+  ) +
+  
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    legend.position = "right"
+  )
+
+```
+
+
